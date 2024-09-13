@@ -356,7 +356,7 @@ fun ForecastByDays(data : Forecast)
             .padding(horizontal = 4.dp)
     ) {
         Text(
-            text = "10 day forecast",
+            text = "3 day forecast",
             fontSize = 20.sp
         )
 
