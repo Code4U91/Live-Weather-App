@@ -26,7 +26,7 @@ class NetworkModule {
 
     @Singleton
     @Provides
-    fun providesTweetsAPI(retrofit: Retrofit) : WeatherAPI
+    fun providesWeatherAPI(retrofit: Retrofit) : WeatherAPI
     {
         return retrofit.create(WeatherAPI::class.java)
     }
