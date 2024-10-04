@@ -1,5 +1,14 @@
 package com.example.weatherapp.screen
 
+import android.annotation.SuppressLint
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.location.LocationManager
+import android.os.Looper
+import android.provider.Settings
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,14 +40,18 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -46,7 +59,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import coil.compose.AsyncImage
 import com.example.weatherapp.api.NetworkResponse
 import com.example.weatherapp.api.forecast.Forecast
@@ -54,6 +71,17 @@ import com.example.weatherapp.api.forecast.Forecastday
 import com.example.weatherapp.api.forecast.Hour
 import com.example.weatherapp.api.forecast.WeatherForecastModel
 import com.example.weatherapp.viewmodels.WeatherViewModel
+import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationResult
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -67,6 +95,13 @@ fun MainWeatherPage() {
     val weatherViewModel: WeatherViewModel = hiltViewModel()
     val weatherResult = weatherViewModel.weatherData.observeAsState()
 
+    val locationFetched = rememberSaveable { mutableStateOf(false) }
+
+    val coordinates = weatherViewModel.coordinates.observeAsState()
+
+    val isLoading = weatherViewModel.isLoading.observeAsState(false)
+
+
     val keyboardController = LocalSoftwareKeyboardController.current
 
     val scrollState = rememberScrollState()
@@ -75,9 +110,95 @@ fun MainWeatherPage() {
         mutableStateOf("")
     }
 
-    Box(modifier = Modifier
-        .fillMaxSize()
-        .padding(WindowInsets.systemBars.asPaddingValues()) // Adds padding based on system bars
+    val context = LocalContext.current
+    val fusedLocationClient = remember {
+        LocationServices.getFusedLocationProviderClient(context)
+    }
+
+    var reLaunch by remember {
+        mutableStateOf(false)
+    }
+
+    //Location permission launcher
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+        onResult = { isGranted ->
+            if (isGranted) {
+                checkLocationEnabled(fusedLocationClient, context, weatherViewModel)
+
+            } else {
+                Toast.makeText(
+                    context,
+                    "Location permission denied",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        })
+
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> {
+                    // Handle onStart
+
+                    if (!locationFetched.value) {
+
+                        CoroutineScope(Dispatchers.Main).launch {
+                            delay(500)
+
+                            when {
+                                ContextCompat.checkSelfPermission(
+                                    context,
+                                    android.Manifest.permission.ACCESS_FINE_LOCATION
+                                ) == PackageManager.PERMISSION_GRANTED -> {
+                                    checkLocationEnabled(
+                                        fusedLocationClient,
+                                        context,
+                                        weatherViewModel
+                                    )
+                                }
+
+                                else -> {
+                                    permissionLauncher.launch(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                                }
+                            }
+                        }
+
+                    }
+                }
+
+                Lifecycle.Event.ON_PAUSE -> {
+                    if (!locationFetched.value) {
+                        reLaunch = true
+
+                    }
+                }
+
+                Lifecycle.Event.ON_RESUME -> {
+                    if (reLaunch) {
+
+                        checkLocationEnabled(fusedLocationClient, context, weatherViewModel)
+                        reLaunch = false
+                    }
+                }
+
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(WindowInsets.systemBars.asPaddingValues()) // Adds padding based on system bars
     ) {
 
 
@@ -113,20 +234,28 @@ fun MainWeatherPage() {
 
                     keyboardActions = KeyboardActions(
                         onSearch = {
-
                             // perform the search action here
-                            // Implementation for the search click button
-                            weatherViewModel.getWeatherData(city)
 
-                            keyboardController?.hide() // hide the keyboard after the search
+                            if (city.isEmpty()) {
+                                weatherViewModel.getWeatherData(coordinates.value.toString())
+                            } else {
+                                weatherViewModel.getWeatherData(city)
+                            }
+
+                            keyboardController?.hide()
                         }
                     )
                 )
 
                 IconButton(onClick = {
 
-                    // Implementation for the search click button
-                    weatherViewModel.getWeatherData(city)
+                    // Implementation for the search click icon button
+                    if (city.isEmpty()) {
+                        weatherViewModel.getWeatherData(coordinates.value.toString())
+                    } else {
+                        weatherViewModel.getWeatherData(city)
+                    }
+
                     keyboardController?.hide()
 
                 }) {
@@ -142,35 +271,38 @@ fun MainWeatherPage() {
             }
 
 
-            when(val result = weatherResult.value)
-            {
-                is NetworkResponse.Error ->
-                {
-                    Text(text = result.message)
+            if (isLoading.value) {
+                CircularProgressIndicator()
+            } else {
+
+                when (val result = weatherResult.value) {
+                    is NetworkResponse.Error -> {
+                        Text(text = result.message)
+                    }
+
+                    NetworkResponse.Loading -> {
+                        CircularProgressIndicator()
+                    }
+
+                    is NetworkResponse.Success -> {
+                        locationFetched.value = true
+                        WeatherDetails(result.data)
+
+                    }
+
+                    null -> {}
                 }
-                NetworkResponse.Loading ->
-                {
-                    CircularProgressIndicator()
-                }
-                is NetworkResponse.Success ->
-                {
-                    WeatherDetails(result.data)
-                }
-                null ->  {}
             }
         }
+
     }
-
-
 
 }
 
 // Below contains the compose components used for the main compose component responsible for the view of the page
 
-
 @Composable
-fun WeatherDetails(data : WeatherForecastModel)
-{
+fun WeatherDetails(data: WeatherForecastModel) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -178,11 +310,11 @@ fun WeatherDetails(data : WeatherForecastModel)
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
 
-        Row (
+        Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.Start,
             verticalAlignment = Alignment.Bottom
-        ){
+        ) {
 
             Icon(
                 imageVector = Icons.Default.LocationOn,
@@ -194,7 +326,7 @@ fun WeatherDetails(data : WeatherForecastModel)
                 fontSize = 30.sp
             )
             Spacer(modifier = Modifier.width(8.dp))
-            
+
             Text(
                 text = data.location.country,
                 fontSize = 18.sp,
@@ -241,25 +373,27 @@ fun WeatherDetails(data : WeatherForecastModel)
 }
 
 @Composable
-fun CardView(data: WeatherForecastModel)
-{
+fun CardView(data: WeatherForecastModel) {
     Card {
 
         Column(
             modifier = Modifier.fillMaxWidth()
         ) {
 
-            CartItem(k = "Humidity", val1 = data.current.humidity.toString()+ "%",
-                k2 = "Wind Speed", val2 = data.current.wind_kph.toString()+ " Km/h"
+            CartItem(
+                k = "Humidity", val1 = data.current.humidity.toString() + "%",
+                k2 = "Wind Speed", val2 = data.current.wind_kph.toString() + " Km/h"
             )
 
 
-            CartItem(k = "UV", val1 = data.current.uv.toString(),
-                k2 = "Precipitation", val2 = data.current.precip_mm.toString()+ " mm"
+            CartItem(
+                k = "UV", val1 = data.current.uv.toString(),
+                k2 = "Precipitation", val2 = data.current.precip_mm.toString() + " mm"
             )
 
 
-            CartItem(k = "Local time", val1 = data.location.localtime.split(" ")[1],
+            CartItem(
+                k = "Local time", val1 = data.location.localtime.split(" ")[1],
                 k2 = "Local date", val2 = data.location.localtime.split(" ")[0]
             )
 
@@ -268,13 +402,12 @@ fun CardView(data: WeatherForecastModel)
 }
 
 @Composable
-fun CartItem(k: String, k2 : String, val1: String, val2: String)
-{
+fun CartItem(k: String, k2: String, val1: String, val2: String) {
     // First row
-    Row (
+    Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceAround
-    ){
+    ) {
         WeatherKeyVal(key = k, value = val1)
         WeatherKeyVal(key = k2, value = val2)
     }
@@ -282,21 +415,19 @@ fun CartItem(k: String, k2 : String, val1: String, val2: String)
 }
 
 @Composable
-fun WeatherKeyVal(key : String, value : String)
-{
+fun WeatherKeyVal(key: String, value: String) {
     Column(
         modifier = Modifier.padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text(text =  value, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-        Text(text =  key, fontWeight = FontWeight.SemiBold, color = Color.Gray)
+        Text(text = value, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+        Text(text = key, fontWeight = FontWeight.SemiBold, color = Color.Gray)
     }
 
 }
 
 @Composable
-fun ForecastByHour(data: Forecastday)
-{
+fun ForecastByHour(data: Forecastday) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -306,10 +437,10 @@ fun ForecastByHour(data: Forecastday)
             text = "Today",
             fontSize = 20.sp
         )
-        
+
         Spacer(modifier = Modifier.height(16.dp))
         LazyRow {
-            items(data.hour){
+            items(data.hour) {
 
                 HourlyWeatherDisplay(weatherDataByHour = it)
             }
@@ -319,9 +450,8 @@ fun ForecastByHour(data: Forecastday)
 
 @Composable
 fun HourlyWeatherDisplay(
-    weatherDataByHour :  Hour
-)
-{
+    weatherDataByHour: Hour
+) {
 
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -330,7 +460,7 @@ fun HourlyWeatherDisplay(
     ) {
 
         Text(
-            text =  weatherDataByHour.time.split(" ")[1]
+            text = weatherDataByHour.time.split(" ")[1]
         )
         AsyncImage(
             modifier = Modifier.size(100.dp),
@@ -338,17 +468,16 @@ fun HourlyWeatherDisplay(
             contentDescription = "Condition icon"
         )
 
-        Text(text = "${weatherDataByHour.temp_c}°C",
+        Text(
+            text = "${weatherDataByHour.temp_c}°C",
             fontWeight = FontWeight.Bold
         )
     }
 }
 
 
-
 @Composable
-fun ForecastByDays(data : Forecast)
-{
+fun ForecastByDays(data: Forecast) {
 
     Column(
         modifier = Modifier
@@ -362,7 +491,7 @@ fun ForecastByDays(data : Forecast)
 
         Spacer(modifier = Modifier.height(16.dp))
         LazyRow {
-            items(data.forecastday){
+            items(data.forecastday) {
 
                 DailyWeatherDisplay(weatherDataByDay = it)
             }
@@ -372,9 +501,8 @@ fun ForecastByDays(data : Forecast)
 
 @Composable
 fun DailyWeatherDisplay(
-    weatherDataByDay :  Forecastday
-)
-{
+    weatherDataByDay: Forecastday
+) {
 
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -383,11 +511,14 @@ fun DailyWeatherDisplay(
     ) {
 
         val inputDate = LocalDate.parse(weatherDataByDay.date) // Parse the input date
-        val outputFormat = DateTimeFormatter.ofPattern("EEE d", Locale.getDefault()) // Format for abbreviated day of the week
+        val outputFormat = DateTimeFormatter.ofPattern(
+            "EEE d",
+            Locale.getDefault()
+        ) // Format for abbreviated day of the week
         val formattedDate = inputDate.format(outputFormat) // Format the date
 
         Text(
-            text =   formattedDate
+            text = formattedDate
         )
 
         AsyncImage(
@@ -396,7 +527,8 @@ fun DailyWeatherDisplay(
             contentDescription = "Condition icon"
         )
 
-        Text(text = "${weatherDataByDay.day.avgtemp_c}°C",
+        Text(
+            text = "${weatherDataByDay.day.avgtemp_c}°C",
             fontWeight = FontWeight.Bold
         )
     }
@@ -407,8 +539,70 @@ fun ContentSeparator() {
     HorizontalDivider(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 8.dp),    // Add padding to create space around the divider
-        thickness = 1.dp,                 // Set the thickness of the divider
-        color = Color.Gray               // Set the color of the divider
+            .padding(vertical = 8.dp),
+        thickness = 1.dp,
+        color = Color.Gray
     )
 }
+
+@SuppressLint("MissingPermission")
+fun getLastKnownLocation(
+    fusedLocationClient: FusedLocationProviderClient,
+    weatherViewModel: WeatherViewModel
+) {
+
+    val locationRequest = LocationRequest.Builder(
+        Priority.PRIORITY_HIGH_ACCURACY, 10000 // interval in milliseconds
+    ).apply {
+        setMinUpdateIntervalMillis(5000) // minimum time interval between updates
+        setMaxUpdates(1)  // optional, if you only need one update
+    }.build()
+
+
+    val locationCallback = object : LocationCallback() {
+        override fun onLocationResult(locationResult: LocationResult) {
+            locationResult.lastLocation?.let {
+                val lat = it.latitude
+                val lon = it.longitude
+
+                weatherViewModel.getWeatherDataByCoordinates(lat, lon)
+            }
+
+
+            weatherViewModel.setLoading(false)
+
+        }
+    }
+
+    fusedLocationClient.requestLocationUpdates(
+        locationRequest,
+        locationCallback,
+        Looper.getMainLooper()
+    )
+}
+
+
+fun checkLocationEnabled(
+    fusedLocationClient: FusedLocationProviderClient,
+    context: android.content.Context,
+    weatherViewModel: WeatherViewModel
+) {
+    val locationManager =
+        context.getSystemService(android.content.Context.LOCATION_SERVICE) as LocationManager
+
+    val isGpsEnabled = locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)
+    val isNetworkEnabled = locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+
+    if (isNetworkEnabled || isGpsEnabled) {
+        weatherViewModel.setLoading(true)
+        getLastKnownLocation(fusedLocationClient, weatherViewModel)
+    } else {
+        Toast.makeText(
+            context,
+            "Please enable location services",
+            Toast.LENGTH_SHORT
+        ).show()
+        context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+    }
+}
+
