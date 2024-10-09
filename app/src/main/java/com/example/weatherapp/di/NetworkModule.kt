@@ -16,8 +16,7 @@ class NetworkModule {
 
     @Singleton
     @Provides
-    fun providesRetrofit() : Retrofit
-    {
+    fun providesRetrofit(): Retrofit {
         return Retrofit.Builder().baseUrl("https://api.weatherapi.com")
             .addConverterFactory(GsonConverterFactory.create())
             .build()
@@ -26,8 +25,7 @@ class NetworkModule {
 
     @Singleton
     @Provides
-    fun providesWeatherAPI(retrofit: Retrofit) : WeatherAPI
-    {
+    fun providesWeatherAPI(retrofit: Retrofit): WeatherAPI {
         return retrofit.create(WeatherAPI::class.java)
     }
 
