@@ -9,6 +9,7 @@ Demo location searched
  
 ![Weather app](https://github.com/user-attachments/assets/444a11d2-1c6c-4aa3-91fc-7b44e0b2ec8a)
 
+# more weather report details on scrolling down
 ![Weather app scroll down](https://github.com/user-attachments/assets/a78c0b8e-dde9-423c-97fd-d4df80877059)
 
 
